@@ -13,6 +13,7 @@ import email.header
 import json
 import sqlite3
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -55,6 +56,37 @@ def get_body_text(msg):
     return ""
 
 
+def get_attachments(msg):
+    """Return list of (index, filename, content_type, size) for attachments."""
+    attachments = []
+    if not msg.is_multipart():
+        return attachments
+    idx = 0
+    for part in msg.walk():
+        disposition = part.get("Content-Disposition", "")
+        if "attachment" in disposition or "inline" in disposition:
+            ct = part.get_content_type()
+            # skip inline text parts (not real attachments)
+            if ct in ("text/plain", "text/html") and "attachment" not in disposition:
+                continue
+            filename = part.get_filename()
+            if filename:
+                filename = decode_header(filename)
+            else:
+                filename = f"unnamed_{idx}"
+            payload = part.get_payload(decode=True)
+            size = len(payload) if payload else 0
+            idx += 1
+            attachments.append((idx, filename, ct, size))
+    return attachments
+
+
+def count_attachments_from_headers(raw_bytes):
+    """Quick check if an email has attachments by scanning raw bytes."""
+    # Fast heuristic: look for Content-Disposition: attachment in raw bytes
+    return raw_bytes.count(b"Content-Disposition: attachment") + raw_bytes.count(b'Content-Disposition: attachment;')
+
+
 def parse_date(date_str):
     if not date_str:
         return None
@@ -84,17 +116,18 @@ def create_index(mbox_path, index_path):
             date TEXT,
             date_utc TEXT,
             sender TEXT,
-            subject TEXT
+            subject TEXT,
+            has_attachments INTEGER DEFAULT 0
         )
     """)
     db.execute("CREATE INDEX idx_date ON emails(date_utc)")
     db.execute("CREATE INDEX idx_sender ON emails(sender)")
     db.execute("CREATE INDEX idx_subject ON emails(subject)")
+    db.execute("CREATE INDEX idx_attach ON emails(has_attachments)")
 
     count = 0
     batch = []
     file_size = mbox_path.stat().st_size
-    import time
     t_start = time.monotonic()
 
     with open(mbox_path, "rb") as f:
@@ -121,7 +154,6 @@ def create_index(mbox_path, index_path):
                     print(f"  [{count} emails, {mb_read:.0f}/{mb_total:.0f} MB ({pct:.1f}%){eta_str}]", file=sys.stderr)
 
                 try:
-                    # Only parse headers for speed
                     header_end = raw.find(b"\n\n")
                     if header_end == -1:
                         header_end = raw.find(b"\r\n\r\n")
@@ -133,14 +165,15 @@ def create_index(mbox_path, index_path):
                     date_utc = date_parsed.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S") if date_parsed else None
                     sender = str(decode_header(msg["From"]))
                     subject = str(decode_header(msg["Subject"]))
+                    has_attach = 1 if count_attachments_from_headers(raw) > 0 else 0
 
-                    batch.append((msg_offset, len(raw), date_raw, date_utc, sender, subject))
+                    batch.append((msg_offset, len(raw), date_raw, date_utc, sender, subject, has_attach))
                 except Exception:
-                    batch.append((msg_offset, len(raw), None, None, "", ""))
+                    batch.append((msg_offset, len(raw), None, None, "", "", 0))
 
                 if len(batch) >= 5000:
                     db.executemany(
-                        "INSERT INTO emails (offset, size, date, date_utc, sender, subject) VALUES (?, ?, ?, ?, ?, ?)",
+                        "INSERT INTO emails (offset, size, date, date_utc, sender, subject, has_attachments) VALUES (?, ?, ?, ?, ?, ?, ?)",
                         batch,
                     )
                     db.commit()
@@ -168,14 +201,15 @@ def create_index(mbox_path, index_path):
                 date_utc = date_parsed.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S") if date_parsed else None
                 sender = str(decode_header(msg["From"]))
                 subject = str(decode_header(msg["Subject"]))
+                has_attach = 1 if count_attachments_from_headers(raw) > 0 else 0
 
-                batch.append((msg_offset, len(raw), date_raw, date_utc, sender, subject))
+                batch.append((msg_offset, len(raw), date_raw, date_utc, sender, subject, has_attach))
             except Exception:
-                batch.append((msg_offset, len(raw), None, None, "", ""))
+                batch.append((msg_offset, len(raw), None, None, "", "", 0))
 
     if batch:
         db.executemany(
-            "INSERT INTO emails (offset, size, date, date_utc, sender, subject) VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO emails (offset, size, date, date_utc, sender, subject, has_attachments) VALUES (?, ?, ?, ?, ?, ?, ?)",
             batch,
         )
     db.commit()
@@ -215,6 +249,8 @@ def search_index(args):
     if args.subject:
         conditions.append("subject LIKE ? COLLATE NOCASE")
         params.append(f"%{args.subject}%")
+    if args.has_attachment:
+        conditions.append("has_attachments = 1")
 
     where = " AND ".join(conditions) if conditions else "1=1"
     order = "date_utc DESC"
@@ -239,6 +275,7 @@ def show_email(mbox_path, index_path, email_id, output_format):
 
     msg = read_msg_at(mbox_path, row["offset"], row["size"])
     body = get_body_text(msg).strip() if msg else ""
+    attachments = get_attachments(msg) if msg else []
 
     record = {
         "id": row["id"],
@@ -248,6 +285,11 @@ def show_email(mbox_path, index_path, email_id, output_format):
         "subject": row["subject"],
         "body": body,
     }
+    if attachments:
+        record["attachments"] = [
+            {"index": idx, "filename": fn, "type": ct, "size": sz}
+            for idx, fn, ct, sz in attachments
+        ]
 
     if output_format == "json":
         print(json.dumps(record, ensure_ascii=False, indent=2))
@@ -257,6 +299,14 @@ def show_email(mbox_path, index_path, email_id, output_format):
                 print(f"{key}: |")
                 for line in val.split("\n"):
                     print(f"  {line}")
+            elif key == "attachments":
+                print("attachments:")
+                for a in val:
+                    print(f"  - index: {a['index']}")
+                    print(f"    filename: {a['filename']}")
+                    print(f"    type: {a['type']}")
+                    print(f"    size: {a['size']}")
+                    print(f"    extract: --attachment {record['id']}-{a['index']}")
             else:
                 print(f"{key}: {val}")
     else:
@@ -265,6 +315,75 @@ def show_email(mbox_path, index_path, email_id, output_format):
         print(f"From:    {record['from']}")
         print(f"Subject: {record['subject']}")
         print(f"Body:\n{body}")
+        if attachments:
+            print(f"\nAttachments ({len(attachments)}):")
+            for idx, fn, ct, sz in attachments:
+                sz_str = f"{sz}" if sz < 1024 else f"{sz/1024:.1f}K" if sz < 1024*1024 else f"{sz/(1024*1024):.1f}M"
+                print(f"  [{record['id']}-{idx}] {fn} ({ct}, {sz_str})")
+            print(f"\nExtract with: --attachment {record['id']}-<number>")
+
+
+def extract_attachment(mbox_path, index_path, spec, output_dir):
+    """Extract an attachment given 'emailID-attachmentIndex'."""
+    try:
+        email_id_str, att_idx_str = spec.rsplit("-", 1)
+        email_id = int(email_id_str)
+        att_idx = int(att_idx_str)
+    except ValueError:
+        print(f"Invalid attachment spec '{spec}'. Use format: EMAIL_ID-ATTACHMENT_INDEX", file=sys.stderr)
+        sys.exit(1)
+
+    db = sqlite3.connect(str(index_path))
+    db.row_factory = sqlite3.Row
+    row = db.execute("SELECT * FROM emails WHERE id = ?", (email_id,)).fetchone()
+    db.close()
+
+    if row is None:
+        print(f"Email with id {email_id} not found.", file=sys.stderr)
+        sys.exit(1)
+
+    msg = read_msg_at(mbox_path, row["offset"], row["size"])
+    if msg is None:
+        print(f"Could not parse email {email_id}.", file=sys.stderr)
+        sys.exit(1)
+
+    attachments = get_attachments(msg)
+    match = None
+    for idx, fn, ct, sz in attachments:
+        if idx == att_idx:
+            match = (idx, fn, ct, sz)
+            break
+
+    if match is None:
+        print(f"Attachment {att_idx} not found in email {email_id}.", file=sys.stderr)
+        if attachments:
+            print(f"Available: {', '.join(f'{idx}: {fn}' for idx, fn, ct, sz in attachments)}", file=sys.stderr)
+        else:
+            print("This email has no attachments.", file=sys.stderr)
+        sys.exit(1)
+
+    # Get the actual payload
+    cur_idx = 0
+    for part in msg.walk():
+        disposition = part.get("Content-Disposition", "")
+        if "attachment" in disposition or "inline" in disposition:
+            ct = part.get_content_type()
+            if ct in ("text/plain", "text/html") and "attachment" not in disposition:
+                continue
+            cur_idx += 1
+            if cur_idx == att_idx:
+                payload = part.get_payload(decode=True)
+                if payload is None:
+                    print(f"Could not decode attachment.", file=sys.stderr)
+                    sys.exit(1)
+
+                out_path = Path(output_dir) / match[1]
+                out_path.write_bytes(payload)
+                print(f"Saved: {out_path} ({len(payload)} bytes)")
+                return
+
+    print(f"Could not extract attachment.", file=sys.stderr)
+    sys.exit(1)
 
 
 def format_result(row, body, found, output_format):
@@ -276,6 +395,8 @@ def format_result(row, body, found, output_format):
         "from": row["sender"],
         "subject": row["subject"],
     }
+    if row["has_attachments"]:
+        record["has_attachments"] = True
     if body is not None:
         record["body_preview"] = body[:500] if len(body) > 500 else body
         record["body_length"] = len(body)
@@ -288,7 +409,8 @@ def format_result(row, body, found, output_format):
             lines.append(f"  {key}: {val}")
         return f"- \n" + "\n".join(lines)
     else:
-        lines = [f"--- #{found} (id:{row['id']}) ---"]
+        attach_marker = " [A]" if row["has_attachments"] else ""
+        lines = [f"--- #{found} (id:{row['id']}{attach_marker}) ---"]
         lines.append(f"Date:    {record['date']}")
         lines.append(f"From:    {record['from']}")
         lines.append(f"Subject: {record['subject']}")
@@ -308,10 +430,14 @@ def main():
     parser.add_argument("--from", dest="sender", type=str, help="Case-insensitive match on From header")
     parser.add_argument("--subject", type=str, help="Case-insensitive match on Subject")
     parser.add_argument("--body", type=str, help="Case-insensitive match in body text (needs mbox seek)")
+    parser.add_argument("--has-attachment", action="store_true", help="Only show emails with attachments")
     parser.add_argument("--limit", type=int, default=10, help="Max results (default: 10)")
     parser.add_argument("--no-body", action="store_true", help="Don't show body preview")
     parser.add_argument("--count", action="store_true", help="Only count matches, don't print")
     parser.add_argument("--show", type=int, metavar="ID", help="Show full email by database ID")
+    parser.add_argument("--attachment", type=str, metavar="ID-N",
+                        help="Extract attachment N from email ID (e.g. 1234-1)")
+    parser.add_argument("--output-dir", type=str, default=".", help="Directory for extracted attachments (default: .)")
     parser.add_argument("--output", type=str, default="text", choices=["text", "json", "yaml"],
                         help="Output format (default: text)")
     parser.add_argument("--re-index", action="store_true", help="Force rebuild the index")
@@ -323,8 +449,13 @@ def main():
 
     if args.re_index or not args.index_path.exists():
         create_index(mbox_path, args.index_path)
-        if args.re_index and not (args.show is not None or args.date_from or args.date_to or args.sender or args.subject or args.body):
+        if args.re_index and not (args.show is not None or args.attachment or args.date_from or args.date_to or args.sender or args.subject or args.body):
             return
+
+    # Extract attachment
+    if args.attachment:
+        extract_attachment(mbox_path, args.index_path, args.attachment, args.output_dir)
+        return
 
     # Show single email by ID
     if args.show is not None:
@@ -367,6 +498,8 @@ def main():
                     "from": row["sender"],
                     "subject": row["subject"],
                 }
+                if row["has_attachments"]:
+                    record["has_attachments"] = True
                 if body is not None:
                     record["body_preview"] = body[:500]
                     record["body_length"] = len(body)
