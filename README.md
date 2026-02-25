@@ -9,7 +9,7 @@ No install needed — run directly from PyPI with [uvx](https://docs.astral.sh/u
 
 ```bash
 cd /path/to/your/takeout-folder
-uvx --from google-takeout-utils@latest search-email --help
+uvx google-takeout-utils@latest search-email --help
 ```
 
 The `@latest` suffix ensures uvx always fetches the most recent version from PyPI.
@@ -48,25 +48,25 @@ All examples use `uvx`. If installed, replace `uvx --from google-takeout-utils@l
 
 ```bash
 # Search by sender (case-insensitive substring match on name or email)
-uvx --from google-takeout-utils@latest search-email --from alice
+uvx google-takeout-utils@latest search-email --from alice
 
 # Date range + sender, limit results
-uvx --from google-takeout-utils@latest search-email --date-from 2023-01-01 --date-to 2023-07-01 --from john --limit 20
+uvx google-takeout-utils@latest search-email --date-from 2023-01-01 --date-to 2023-07-01 --from john --limit 20
 
 # Search by subject
-uvx --from google-takeout-utils@latest search-email --subject "invoice" --limit 5
+uvx google-takeout-utils@latest search-email --subject "invoice" --limit 5
 
 # Only emails with attachments
-uvx --from google-takeout-utils@latest search-email --has-attachment --from bank --no-body
+uvx google-takeout-utils@latest search-email --has-attachment --from bank --no-body
 
 # Count matches
-uvx --from google-takeout-utils@latest search-email --count --from newsletter
+uvx google-takeout-utils@latest search-email --count --from newsletter
 
 # Full-text body search (slower — seeks into mbox for each candidate)
-uvx --from google-takeout-utils@latest search-email --body "project proposal" --limit 5
+uvx google-takeout-utils@latest search-email --body "project proposal" --limit 5
 
 # Headers only, no body preview
-uvx --from google-takeout-utils@latest search-email --from alice --no-body
+uvx google-takeout-utils@latest search-email --from alice --no-body
 ```
 
 Search results are sorted by date (newest first). Each result shows a database ID
@@ -76,13 +76,13 @@ and an `[A]` marker if the email has attachments.
 
 ```bash
 # Show full email by database ID (from search results)
-uvx --from google-takeout-utils@latest search-email --show 4521
+uvx google-takeout-utils@latest search-email --show 4521
 
 # As JSON (useful for piping to other tools or LLMs)
-uvx --from google-takeout-utils@latest search-email --show 4521 --output json
+uvx google-takeout-utils@latest search-email --show 4521 --output json
 
 # As YAML
-uvx --from google-takeout-utils@latest search-email --show 4521 --output yaml
+uvx google-takeout-utils@latest search-email --show 4521 --output yaml
 ```
 
 `--show` displays the complete body and lists all attachments with their extract commands.
@@ -91,10 +91,10 @@ uvx --from google-takeout-utils@latest search-email --show 4521 --output yaml
 
 ```bash
 # Save first attachment of email 4521 to current directory
-uvx --from google-takeout-utils@latest search-email --attachment 4521-1
+uvx google-takeout-utils@latest search-email --attachment 4521-1
 
 # Save to a specific directory
-uvx --from google-takeout-utils@latest search-email --attachment 4521-2 --output-dir /tmp
+uvx google-takeout-utils@latest search-email --attachment 4521-2 --output-dir /tmp
 ```
 
 Use `--show ID` first to see available attachments and their index numbers.
@@ -103,7 +103,7 @@ Use `--show ID` first to see available attachments and their index numbers.
 
 ```bash
 # Force rebuild (e.g. after a new Google Takeout export)
-uvx --from google-takeout-utils@latest search-email --re-index
+uvx google-takeout-utils@latest search-email --re-index
 ```
 
 ## How it works

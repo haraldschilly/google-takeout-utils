@@ -431,45 +431,9 @@ def format_result(row, body, found, output_format):
         return "\n".join(lines)
 
 
-def main():
-    parser = argparse.ArgumentParser(
-        description="Search and extract emails from a Google Takeout mbox export.",
-        epilog="""
-MODES OF OPERATION:
-
-  Search (default):  Filter emails by date, sender, subject, body, or attachments.
-                     Results are sorted by date (newest first) and show database IDs.
-                     Example: %(prog)s --from alice --date-from 2024-01-01 --limit 20
-
-  Show single email: Display full email content including body and attachment list.
-                     Use the database ID from search results.
-                     Example: %(prog)s --show 1234
-
-  Extract attachment: Save an attachment to disk. Use the ID-N format shown in --show output.
-                      Example: %(prog)s --attachment 1234-1 --output-dir /tmp
-
-  Build/rebuild index: On first run, a SQLite index is built automatically (~2 min for 8GB).
-                       Use --re-index to force rebuild (e.g. after new Takeout export).
-                       Index location: Takeout/Mail/index.sqlite
-
-OUTPUT FORMATS:
-  text (default): Human-readable, one email per block. [A] marks emails with attachments.
-  json:           Machine-readable JSON. Search returns an array, --show returns an object.
-  yaml:           YAML-like output, one key per line. Body uses block scalar (|) syntax.
-
-EXAMPLES:
-  %(prog)s --from john --no-body                      Search by sender, headers only
-  %(prog)s --date-from 2023-01-01 --date-to 2023-07-01  Emails in date range
-  %(prog)s --subject invoice --has-attachment          Invoices with attachments
-  %(prog)s --count --from newsletter                   Count emails from newsletters
-  %(prog)s --body "project proposal" --limit 5         Full-text body search (slower)
-  %(prog)s --show 4521                                 Read email #4521 with attachments
-  %(prog)s --show 4521 --output json                   Same, as JSON (for piping/LLM)
-  %(prog)s --attachment 4521-1                         Save first attachment to current dir
-  %(prog)s --attachment 4521-2 --output-dir /tmp       Save second attachment to /tmp
-""",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
+def add_arguments(parser):
+    """Add search-email arguments to a parser (used by both standalone and subcommand)."""
+    parser.formatter_class = argparse.RawDescriptionHelpFormatter
 
     search = parser.add_argument_group("search filters")
     search.add_argument("--from", dest="sender", type=str,
@@ -512,9 +476,22 @@ EXAMPLES:
                        help="Force rebuild the SQLite index from the mbox file. "
                             "Required after importing a new Google Takeout export")
     index.add_argument("--mbox", type=str, default=None,
-                       help="Path to the mbox file (default: auto-detected relative to this script)")
-    args = parser.parse_args()
+                       help="Path to the mbox file (default: auto-detected from cwd)")
 
+
+def register_subcommand(subparsers):
+    """Register search-email as a subcommand."""
+    parser = subparsers.add_parser(
+        "search-email",
+        help="Search, read, and extract emails from the Gmail mbox export",
+        description="Search and extract emails from a Google Takeout mbox export.",
+    )
+    add_arguments(parser)
+    parser.set_defaults(func=run)
+
+
+def run(args):
+    """Execute the search-email command with parsed args."""
     mbox_path = Path(args.mbox) if args.mbox else _default_mbox_path()
     args.index_path = mbox_path.parent / "index.sqlite"
 
@@ -591,6 +568,16 @@ EXAMPLES:
         print(json.dumps(results, ensure_ascii=False, indent=2))
     elif found == 0:
         print("No matches found.", file=sys.stderr)
+
+
+def main():
+    """Standalone entry point (for direct script execution)."""
+    parser = argparse.ArgumentParser(
+        description="Search and extract emails from a Google Takeout mbox export.",
+    )
+    add_arguments(parser)
+    args = parser.parse_args()
+    run(args)
 
 
 if __name__ == "__main__":

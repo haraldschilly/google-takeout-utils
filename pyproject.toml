@@ -24,7 +24,7 @@ Homepage = "https://github.com/haraldschilly/google-takeout-utils"
 Repository = "https://github.com/haraldschilly/google-takeout-utils"
 
 [project.scripts]
-search-email = "search_email:main"
+google-takeout-utils = "cli:main"
 
 [build-system]
 requires = ["hatchling"]
@@ -32,4 +32,4 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["."]
-only-include = ["search_email.py"]
+only-include = ["cli.py", "search_email.py"]
