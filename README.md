@@ -42,7 +42,7 @@ uv tool install google-takeout-utils
 
 ## Usage
 
-All examples use `uvx`. If installed, replace `uvx --from google-takeout-utils@latest` with just `search-email`.
+All examples use `uvx`. If installed globally, replace `uvx google-takeout-utils@latest` with just `google-takeout-utils`.
 
 ### Search emails
 
