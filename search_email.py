@@ -10,6 +10,7 @@ import argparse
 import email
 import email.utils
 import email.header
+import json
 import sqlite3
 import sys
 from datetime import datetime, timezone
@@ -225,6 +226,81 @@ def search_index(args):
     return rows
 
 
+def show_email(mbox_path, index_path, email_id, output_format):
+    """Show a single email by its database ID."""
+    db = sqlite3.connect(str(index_path))
+    db.row_factory = sqlite3.Row
+    row = db.execute("SELECT * FROM emails WHERE id = ?", (email_id,)).fetchone()
+    db.close()
+
+    if row is None:
+        print(f"Email with id {email_id} not found.", file=sys.stderr)
+        sys.exit(1)
+
+    msg = read_msg_at(mbox_path, row["offset"], row["size"])
+    body = get_body_text(msg).strip() if msg else ""
+
+    record = {
+        "id": row["id"],
+        "date": row["date"] or "(unknown)",
+        "date_utc": row["date_utc"],
+        "from": row["sender"],
+        "subject": row["subject"],
+        "body": body,
+    }
+
+    if output_format == "json":
+        print(json.dumps(record, ensure_ascii=False, indent=2))
+    elif output_format == "yaml":
+        for key, val in record.items():
+            if key == "body" and "\n" in val:
+                print(f"{key}: |")
+                for line in val.split("\n"):
+                    print(f"  {line}")
+            else:
+                print(f"{key}: {val}")
+    else:
+        print(f"ID:      {record['id']}")
+        print(f"Date:    {record['date']}")
+        print(f"From:    {record['from']}")
+        print(f"Subject: {record['subject']}")
+        print(f"Body:\n{body}")
+
+
+def format_result(row, body, found, output_format):
+    """Format a single search result."""
+    record = {
+        "id": row["id"],
+        "date": row["date"] or "(unknown)",
+        "date_utc": row["date_utc"],
+        "from": row["sender"],
+        "subject": row["subject"],
+    }
+    if body is not None:
+        record["body_preview"] = body[:500] if len(body) > 500 else body
+        record["body_length"] = len(body)
+
+    if output_format == "json":
+        return json.dumps(record, ensure_ascii=False)
+    elif output_format == "yaml":
+        lines = []
+        for key, val in record.items():
+            lines.append(f"  {key}: {val}")
+        return f"- \n" + "\n".join(lines)
+    else:
+        lines = [f"--- #{found} (id:{row['id']}) ---"]
+        lines.append(f"Date:    {record['date']}")
+        lines.append(f"From:    {record['from']}")
+        lines.append(f"Subject: {record['subject']}")
+        if body is not None:
+            preview = body[:500].replace("\n", "\n         ")
+            lines.append(f"Body:    {preview}")
+            if len(body) > 500:
+                lines.append(f"         [...{len(body)} chars total]")
+        lines.append("")
+        return "\n".join(lines)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Search Google Takeout emails")
     parser.add_argument("--date-from", type=str, help="Start date (YYYY-MM-DD), inclusive")
@@ -235,6 +311,9 @@ def main():
     parser.add_argument("--limit", type=int, default=10, help="Max results (default: 10)")
     parser.add_argument("--no-body", action="store_true", help="Don't show body preview")
     parser.add_argument("--count", action="store_true", help="Only count matches, don't print")
+    parser.add_argument("--show", type=int, metavar="ID", help="Show full email by database ID")
+    parser.add_argument("--output", type=str, default="text", choices=["text", "json", "yaml"],
+                        help="Output format (default: text)")
     parser.add_argument("--re-index", action="store_true", help="Force rebuild the index")
     parser.add_argument("--mbox", type=str, default=str(MBOX_PATH), help="Path to mbox file")
     args = parser.parse_args()
@@ -244,8 +323,13 @@ def main():
 
     if args.re_index or not args.index_path.exists():
         create_index(mbox_path, args.index_path)
-        if args.re_index and not (args.date_from or args.date_to or args.sender or args.subject or args.body):
+        if args.re_index and not (args.show is not None or args.date_from or args.date_to or args.sender or args.subject or args.body):
             return
+
+    # Show single email by ID
+    if args.show is not None:
+        show_email(mbox_path, args.index_path, args.show, args.output)
+        return
 
     if args.date_from:
         args.date_from = datetime.strptime(args.date_from, "%Y-%m-%d")
@@ -254,6 +338,9 @@ def main():
 
     rows = search_index(args)
 
+    if args.output == "json" and not args.count:
+        results = []
+
     found = 0
     for row in rows:
         # If body filter requested, seek into mbox and check
@@ -261,36 +348,43 @@ def main():
             msg = read_msg_at(mbox_path, row["offset"], row["size"])
             if msg is None:
                 continue
-            body = get_body_text(msg).lower()
-            if args.body.lower() not in body:
+            body_text = get_body_text(msg).lower()
+            if args.body.lower() not in body_text:
                 continue
 
         found += 1
+        body = None
+        if not args.count and not args.no_body:
+            msg = read_msg_at(mbox_path, row["offset"], row["size"])
+            body = get_body_text(msg).strip() if msg else ""
 
         if not args.count:
-            if not args.no_body:
-                msg = read_msg_at(mbox_path, row["offset"], row["size"])
-                body = get_body_text(msg).strip() if msg else ""
-                body_preview = body[:500].replace("\n", "\n         ") if body else ""
-                body_suffix = f"\n         [...{len(body)} chars total]" if body and len(body) > 500 else ""
+            if args.output == "json":
+                record = {
+                    "id": row["id"],
+                    "date": row["date"] or "(unknown)",
+                    "date_utc": row["date_utc"],
+                    "from": row["sender"],
+                    "subject": row["subject"],
+                }
+                if body is not None:
+                    record["body_preview"] = body[:500]
+                    record["body_length"] = len(body)
+                results.append(record)
             else:
-                body_preview = ""
-                body_suffix = ""
-
-            print(f"--- #{found} ---")
-            print(f"Date:    {row['date'] or '(unknown)'}")
-            print(f"From:    {row['sender']}")
-            print(f"Subject: {row['subject']}")
-            if body_preview:
-                print(f"Body:    {body_preview}{body_suffix}")
-            print()
-            sys.stdout.flush()
+                print(format_result(row, body, found, args.output))
+                sys.stdout.flush()
 
         if not args.count and found >= args.limit:
             break
 
     if args.count:
-        print(f"{found} matches")
+        if args.output == "json":
+            print(json.dumps({"count": found}))
+        else:
+            print(f"{found} matches")
+    elif args.output == "json" and not args.count:
+        print(json.dumps(results, ensure_ascii=False, indent=2))
     elif found == 0:
         print("No matches found.", file=sys.stderr)
 
