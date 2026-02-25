@@ -3,11 +3,24 @@
 CLI tools for searching, reading, and extracting data from Google Takeout exports.
 Designed to work with the mbox email export — no conversion or import into an email client needed.
 
+## Install
+
+```bash
+pip install google-takeout-utils
+```
+
+Or with [uv](https://docs.astral.sh/uv/):
+
+```bash
+uv tool install google-takeout-utils
+```
+
+This provides the `search-email` command.
+
 ## Setup
 
 1. Extract your Google Takeout `.tgz` archives into a folder
-2. Clone this repo as `utils/` next to the extracted `Takeout/` directory
-3. Create a wrapper script (see below)
+2. Run `search-email` from within that folder, or use `--mbox` to point to the mbox file
 
 ```
 your-takeout-folder/
