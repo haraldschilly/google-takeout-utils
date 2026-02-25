@@ -17,8 +17,16 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-MBOX_PATH = Path(__file__).parent.parent / "Takeout" / "Mail" / "All mail Including Spam and Trash.mbox"
-INDEX_PATH = Path(__file__).parent.parent / "Takeout" / "Mail" / "index.sqlite"
+MBOX_NAME = "All mail Including Spam and Trash.mbox"
+MBOX_RELATIVE = Path("Takeout") / "Mail" / MBOX_NAME
+
+
+def _default_mbox_path():
+    """Find mbox: first try relative to script (clone layout), then relative to cwd (uvx/pip)."""
+    script_relative = Path(__file__).parent.parent / "Takeout" / "Mail" / MBOX_NAME
+    if script_relative.exists():
+        return script_relative
+    return Path.cwd() / MBOX_RELATIVE
 
 
 def decode_header(raw):
@@ -503,11 +511,11 @@ EXAMPLES:
     index.add_argument("--re-index", action="store_true",
                        help="Force rebuild the SQLite index from the mbox file. "
                             "Required after importing a new Google Takeout export")
-    index.add_argument("--mbox", type=str, default=str(MBOX_PATH),
+    index.add_argument("--mbox", type=str, default=None,
                        help="Path to the mbox file (default: auto-detected relative to this script)")
     args = parser.parse_args()
 
-    mbox_path = Path(args.mbox)
+    mbox_path = Path(args.mbox) if args.mbox else _default_mbox_path()
     args.index_path = mbox_path.parent / "index.sqlite"
 
     if args.re_index or not args.index_path.exists():

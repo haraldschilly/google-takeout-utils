@@ -3,7 +3,22 @@
 CLI tools for searching, reading, and extracting data from Google Takeout exports.
 Designed to work with the mbox email export — no conversion or import into an email client needed.
 
+## Quick start
+
+No install needed — run directly from PyPI with [uvx](https://docs.astral.sh/uv/):
+
+```bash
+cd /path/to/your/takeout-folder
+uvx --from google-takeout-utils search-email --from alice --limit 5
+```
+
+This downloads the latest version, runs the command, and cleans up automatically.
+The tool expects a `Takeout/Mail/All mail Including Spam and Trash.mbox` file
+relative to the current directory.
+
 ## Install
+
+For repeated use, install it permanently:
 
 ```bash
 pip install google-takeout-utils
@@ -15,7 +30,7 @@ Or with [uv](https://docs.astral.sh/uv/):
 uv tool install google-takeout-utils
 ```
 
-This provides the `search-email` command.
+This provides the `search-email` command globally.
 
 ## Setup
 
