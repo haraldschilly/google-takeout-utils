@@ -424,24 +424,87 @@ def format_result(row, body, found, output_format):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Search Google Takeout emails")
-    parser.add_argument("--date-from", type=str, help="Start date (YYYY-MM-DD), inclusive")
-    parser.add_argument("--date-to", type=str, help="End date (YYYY-MM-DD), exclusive")
-    parser.add_argument("--from", dest="sender", type=str, help="Case-insensitive match on From header")
-    parser.add_argument("--subject", type=str, help="Case-insensitive match on Subject")
-    parser.add_argument("--body", type=str, help="Case-insensitive match in body text (needs mbox seek)")
-    parser.add_argument("--has-attachment", action="store_true", help="Only show emails with attachments")
-    parser.add_argument("--limit", type=int, default=10, help="Max results (default: 10)")
-    parser.add_argument("--no-body", action="store_true", help="Don't show body preview")
-    parser.add_argument("--count", action="store_true", help="Only count matches, don't print")
-    parser.add_argument("--show", type=int, metavar="ID", help="Show full email by database ID")
-    parser.add_argument("--attachment", type=str, metavar="ID-N",
-                        help="Extract attachment N from email ID (e.g. 1234-1)")
-    parser.add_argument("--output-dir", type=str, default=".", help="Directory for extracted attachments (default: .)")
-    parser.add_argument("--output", type=str, default="text", choices=["text", "json", "yaml"],
-                        help="Output format (default: text)")
-    parser.add_argument("--re-index", action="store_true", help="Force rebuild the index")
-    parser.add_argument("--mbox", type=str, default=str(MBOX_PATH), help="Path to mbox file")
+    parser = argparse.ArgumentParser(
+        description="Search and extract emails from a Google Takeout mbox export.",
+        epilog="""
+MODES OF OPERATION:
+
+  Search (default):  Filter emails by date, sender, subject, body, or attachments.
+                     Results are sorted by date (newest first) and show database IDs.
+                     Example: %(prog)s --from alice --date-from 2024-01-01 --limit 20
+
+  Show single email: Display full email content including body and attachment list.
+                     Use the database ID from search results.
+                     Example: %(prog)s --show 1234
+
+  Extract attachment: Save an attachment to disk. Use the ID-N format shown in --show output.
+                      Example: %(prog)s --attachment 1234-1 --output-dir /tmp
+
+  Build/rebuild index: On first run, a SQLite index is built automatically (~2 min for 8GB).
+                       Use --re-index to force rebuild (e.g. after new Takeout export).
+                       Index location: Takeout/Mail/index.sqlite
+
+OUTPUT FORMATS:
+  text (default): Human-readable, one email per block. [A] marks emails with attachments.
+  json:           Machine-readable JSON. Search returns an array, --show returns an object.
+  yaml:           YAML-like output, one key per line. Body uses block scalar (|) syntax.
+
+EXAMPLES:
+  %(prog)s --from john --no-body                      Search by sender, headers only
+  %(prog)s --date-from 2023-01-01 --date-to 2023-07-01  Emails in date range
+  %(prog)s --subject invoice --has-attachment          Invoices with attachments
+  %(prog)s --count --from newsletter                   Count emails from newsletters
+  %(prog)s --body "project proposal" --limit 5         Full-text body search (slower)
+  %(prog)s --show 4521                                 Read email #4521 with attachments
+  %(prog)s --show 4521 --output json                   Same, as JSON (for piping/LLM)
+  %(prog)s --attachment 4521-1                         Save first attachment to current dir
+  %(prog)s --attachment 4521-2 --output-dir /tmp       Save second attachment to /tmp
+""",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+
+    search = parser.add_argument_group("search filters")
+    search.add_argument("--from", dest="sender", type=str,
+                        help="Case-insensitive substring match on the From header (name or email address)")
+    search.add_argument("--subject", type=str,
+                        help="Case-insensitive substring match on the Subject header")
+    search.add_argument("--body", type=str,
+                        help="Case-insensitive substring match in the email body text. "
+                             "Slower than header filters because it seeks into the mbox file for each candidate")
+    search.add_argument("--date-from", type=str,
+                        help="Only emails on or after this date, format YYYY-MM-DD (UTC)")
+    search.add_argument("--date-to", type=str,
+                        help="Only emails before this date, format YYYY-MM-DD (UTC, exclusive)")
+    search.add_argument("--has-attachment", action="store_true",
+                        help="Only show emails that have file attachments")
+    search.add_argument("--limit", type=int, default=10,
+                        help="Maximum number of results to return (default: 10)")
+    search.add_argument("--count", action="store_true",
+                        help="Only print the count of matching emails, do not display them")
+
+    display = parser.add_argument_group("display options")
+    display.add_argument("--no-body", action="store_true",
+                         help="Omit body preview in search results (show headers only)")
+    display.add_argument("--output", type=str, default="text", choices=["text", "json", "yaml"],
+                         help="Output format: text (human-readable), json (machine-readable), yaml (default: text)")
+
+    actions = parser.add_argument_group("single-email actions")
+    actions.add_argument("--show", type=int, metavar="ID",
+                         help="Show full email by its database ID (from search results). "
+                              "Displays complete body and lists all attachments with their extract commands")
+    actions.add_argument("--attachment", type=str, metavar="ID-N",
+                         help="Extract attachment number N from email ID and save to disk. "
+                              "Format: EMAIL_ID-ATTACHMENT_INDEX, e.g. 1234-1. "
+                              "Use --show ID first to see available attachments")
+    actions.add_argument("--output-dir", type=str, default=".",
+                         help="Directory to save extracted attachments (default: current directory)")
+
+    index = parser.add_argument_group("index management")
+    index.add_argument("--re-index", action="store_true",
+                       help="Force rebuild the SQLite index from the mbox file. "
+                            "Required after importing a new Google Takeout export")
+    index.add_argument("--mbox", type=str, default=str(MBOX_PATH),
+                       help="Path to the mbox file (default: auto-detected relative to this script)")
     args = parser.parse_args()
 
     mbox_path = Path(args.mbox)
