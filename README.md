@@ -8,11 +8,16 @@ No conversion or import into an email client needed.
 No install needed — run directly from PyPI with [uvx](https://docs.astral.sh/uv/):
 
 ```bash
+# Either cd into the takeout folder:
 cd /path/to/your/takeout-folder
 uvx google-takeout-utils@latest search-email --help
+
+# Or point to it from anywhere:
+uvx google-takeout-utils@latest --takeout-dir /path/to/your/takeout-folder search-email --help
 ```
 
 The `@latest` suffix ensures uvx always fetches the most recent version from PyPI.
+`--takeout-dir` is a top-level option that works with all subcommands.
 
 ## Setup
 
@@ -161,6 +166,12 @@ The index is rebuilt automatically when missing (e.g. after a fresh Takeout impo
 | `--thread ID` | Show full email thread as indented tree |
 | `--attachment ID-N` | Extract attachment N from email ID (e.g. `4521-1`) |
 | `--output-dir PATH` | Directory for extracted attachments (default: cwd) |
+
+### Global
+
+| Option | Description |
+|--------|-------------|
+| `--takeout-dir PATH` | Path to the takeout root folder (alternative to `cd`) |
 
 ### Index
 
