@@ -8,6 +8,7 @@
 
 - **Do not leak private or sensitive information.** This tool processes personal email data. Never log, print, or expose email content, sender addresses, or other PII in error messages, debug output, or committed test fixtures.
 - **Always use `uv`** for running Python, e.g. `uv run python3 ...` to stay in the uv environment.
+- **Release checklist:** When tagging a new version, after pushing the tag, add a corresponding entry to `CHANGELOG.md` (follows [Keep a Changelog](https://keepachangelog.com/) format) and push it as a follow-up commit.
 
 ## Project Structure
 
