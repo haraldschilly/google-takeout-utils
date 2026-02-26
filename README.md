@@ -51,7 +51,10 @@ All examples use `uvx`. If installed globally, replace `uvx google-takeout-utils
 uvx google-takeout-utils@latest search-email --from alice
 
 # Date range + sender, limit results
-uvx google-takeout-utils@latest search-email --date-from 2023-01-01 --date-to 2023-07-01 --from john --limit 20
+uvx google-takeout-utils@latest search-email --after 2023-01-01 --before 2023-07-01 --from john --limit 20
+
+# Search by recipient (searches To, CC, and BCC)
+uvx google-takeout-utils@latest search-email --to alice@example.com
 
 # Search by subject
 uvx google-takeout-utils@latest search-email --subject "invoice" --limit 5
@@ -85,7 +88,16 @@ uvx google-takeout-utils@latest search-email --show 4521 --output json
 uvx google-takeout-utils@latest search-email --show 4521 --output yaml
 ```
 
-`--show` displays the complete body and lists all attachments with their extract commands.
+`--show` displays the complete body, To/CC/BCC recipients, and lists all attachments with their extract commands.
+
+### View email threads
+
+```bash
+# Reconstruct the full thread containing email 4521
+uvx google-takeout-utils@latest search-email --thread 4521
+```
+
+Shows an indented tree of all related emails with their database IDs, subjects (truncated to 70 chars), senders, and dates. The starting email is marked with `<--`.
 
 ### Extract attachments
 
@@ -109,8 +121,9 @@ uvx google-takeout-utils@latest search-email --re-index
 ## How it works
 
 On first run, the tool scans the entire mbox file and builds a **SQLite index**
-(`Takeout/Mail/index.sqlite`) containing date, sender, subject, and attachment flags
-for every email.
+(`Takeout/Mail/index.sqlite`) containing date, sender, recipients (To/CC/BCC), subject,
+attachment flags, and threading information (Message-ID, In-Reply-To) for every email.
+Threads are precomputed using Union-Find on In-Reply-To chains.
 
 After indexing, all searches query the SQLite database and return results instantly.
 Body text and attachments are fetched on demand by seeking to the byte offset in the mbox file.
@@ -124,10 +137,11 @@ The index is rebuilt automatically when missing (e.g. after a fresh Takeout impo
 | Option | Description |
 |--------|-------------|
 | `--from TEXT` | Case-insensitive substring match on From header (name or email) |
+| `--to TEXT` | Case-insensitive substring match on To/CC/BCC headers |
 | `--subject TEXT` | Case-insensitive substring match on Subject |
 | `--body TEXT` | Case-insensitive substring match in body text (slower) |
-| `--date-from YYYY-MM-DD` | Emails on or after this date (UTC, inclusive) |
-| `--date-to YYYY-MM-DD` | Emails before this date (UTC, exclusive) |
+| `--after YYYY-MM-DD` | Emails on or after this date (UTC, inclusive) |
+| `--before YYYY-MM-DD` | Emails before this date (UTC, exclusive) |
 | `--has-attachment` | Only emails with file attachments |
 | `--limit N` | Max results (default: 10) |
 | `--count` | Only print match count |
@@ -144,6 +158,7 @@ The index is rebuilt automatically when missing (e.g. after a fresh Takeout impo
 | Option | Description |
 |--------|-------------|
 | `--show ID` | Show full email by database ID |
+| `--thread ID` | Show full email thread as indented tree |
 | `--attachment ID-N` | Extract attachment N from email ID (e.g. `4521-1`) |
 | `--output-dir PATH` | Directory for extracted attachments (default: cwd) |
 
