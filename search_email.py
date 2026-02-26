@@ -44,6 +44,33 @@ def decode_header(raw):
     return " ".join(decoded)
 
 
+def extract_addresses(raw):
+    """Extract email addresses from a header value, return as JSON array string."""
+    if not raw:
+        return "[]"
+    decoded = decode_header(raw)
+    addrs = email.utils.getaddresses([decoded])
+    result = [addr.lower() for _name, addr in addrs if addr]
+    return json.dumps(result)
+
+
+def format_addresses(json_addrs, max_addrs=3):
+    """Format a JSON array of addresses for display, capped at max_addrs."""
+    if not json_addrs or json_addrs == "[]":
+        return ""
+    try:
+        addrs = json.loads(json_addrs)
+    except (json.JSONDecodeError, TypeError):
+        return str(json_addrs)
+    if not addrs:
+        return ""
+    shown = addrs[:max_addrs]
+    result = ", ".join(shown)
+    if len(addrs) > max_addrs:
+        result += f", ... +{len(addrs) - max_addrs} more"
+    return result
+
+
 def get_body_text(msg):
     if msg.is_multipart():
         for part in msg.walk():
@@ -126,14 +153,26 @@ def create_index(mbox_path, index_path):
             date TEXT,
             date_utc TEXT,
             sender TEXT,
+            recipient TEXT,
+            cc TEXT,
+            bcc TEXT,
             subject TEXT,
-            has_attachments INTEGER DEFAULT 0
+            has_attachments INTEGER DEFAULT 0,
+            message_id TEXT,
+            in_reply_to TEXT,
+            refs TEXT,
+            thread_id TEXT
         )
     """)
     db.execute("CREATE INDEX idx_date ON emails(date_utc)")
     db.execute("CREATE INDEX idx_sender ON emails(sender)")
     db.execute("CREATE INDEX idx_subject ON emails(subject)")
     db.execute("CREATE INDEX idx_attach ON emails(has_attachments)")
+    db.execute("CREATE INDEX idx_recipient ON emails(recipient)")
+    db.execute("CREATE INDEX idx_cc ON emails(cc)")
+    db.execute("CREATE INDEX idx_message_id ON emails(message_id)")
+    db.execute("CREATE INDEX idx_in_reply_to ON emails(in_reply_to)")
+    db.execute("CREATE INDEX idx_thread_id ON emails(thread_id)")
 
     count = 0
     batch = []
@@ -174,16 +213,22 @@ def create_index(mbox_path, index_path):
                     date_parsed = parse_date(date_raw)
                     date_utc = date_parsed.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S") if date_parsed else None
                     sender = str(decode_header(msg["From"]))
+                    recipient = extract_addresses(msg["To"])
+                    cc = extract_addresses(msg["Cc"])
+                    bcc = extract_addresses(msg["Bcc"])
                     subject = str(decode_header(msg["Subject"]))
                     has_attach = 1 if count_attachments_from_headers(raw) > 0 else 0
+                    message_id = msg["Message-ID"] or ""
+                    in_reply_to = msg["In-Reply-To"] or ""
+                    refs = msg["References"] or ""
 
-                    batch.append((msg_offset, len(raw), date_raw, date_utc, sender, subject, has_attach))
+                    batch.append((msg_offset, len(raw), date_raw, date_utc, sender, recipient, cc, bcc, subject, has_attach, message_id, in_reply_to, refs))
                 except Exception:
-                    batch.append((msg_offset, len(raw), None, None, "", "", 0))
+                    batch.append((msg_offset, len(raw), None, None, "", "[]", "[]", "[]", "", 0, "", "", ""))
 
                 if len(batch) >= 5000:
                     db.executemany(
-                        "INSERT INTO emails (offset, size, date, date_utc, sender, subject, has_attachments) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        "INSERT INTO emails (offset, size, date, date_utc, sender, recipient, cc, bcc, subject, has_attachments, message_id, in_reply_to, refs) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         batch,
                     )
                     db.commit()
@@ -210,21 +255,89 @@ def create_index(mbox_path, index_path):
                 date_parsed = parse_date(date_raw)
                 date_utc = date_parsed.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S") if date_parsed else None
                 sender = str(decode_header(msg["From"]))
+                recipient = extract_addresses(msg["To"])
+                cc = extract_addresses(msg["Cc"])
+                bcc = extract_addresses(msg["Bcc"])
                 subject = str(decode_header(msg["Subject"]))
                 has_attach = 1 if count_attachments_from_headers(raw) > 0 else 0
+                message_id = msg["Message-ID"] or ""
+                in_reply_to = msg["In-Reply-To"] or ""
+                refs = msg["References"] or ""
 
-                batch.append((msg_offset, len(raw), date_raw, date_utc, sender, subject, has_attach))
+                batch.append((msg_offset, len(raw), date_raw, date_utc, sender, recipient, cc, bcc, subject, has_attach, message_id, in_reply_to, refs))
             except Exception:
-                batch.append((msg_offset, len(raw), None, None, "", "", 0))
+                batch.append((msg_offset, len(raw), None, None, "", "[]", "[]", "[]", "", 0, "", "", ""))
 
     if batch:
         db.executemany(
-            "INSERT INTO emails (offset, size, date, date_utc, sender, subject, has_attachments) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO emails (offset, size, date, date_utc, sender, recipient, cc, bcc, subject, has_attachments, message_id, in_reply_to, refs) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             batch,
         )
     db.commit()
+
+    # --- Compute thread_id using Union-Find ---
+    print(f"Computing thread IDs ...", file=sys.stderr)
+
+    parent = {}  # union-find parent map
+
+    def find(x):
+        while parent.get(x, x) != x:
+            parent[x] = parent.get(parent[x], parent[x])  # path compression
+            x = parent[x]
+        return x
+
+    def union(a, b):
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[ra] = rb
+
+    def clean_mid(mid):
+        return mid.strip().strip("<>").strip() if mid else ""
+
+    rows = db.execute("SELECT id, message_id, in_reply_to FROM emails").fetchall()
+
+    # Collect all known message_ids first
+    known_mids = set()
+    for row_id, mid_raw, irt_raw in rows:
+        mid = clean_mid(mid_raw)
+        if mid:
+            known_mids.add(mid)
+            if mid not in parent:
+                parent[mid] = mid
+
+    # Only union via in_reply_to (direct parent link).
+    # Using refs would merge unrelated threads through shared phantom message_ids.
+    for row_id, mid_raw, irt_raw in rows:
+        mid = clean_mid(mid_raw)
+        if not mid:
+            continue
+        irt = clean_mid(irt_raw)
+        if irt and irt in known_mids:
+            union(mid, irt)
+
+    # Build batch updates: set thread_id = root of union-find group
+    batch = []
+    for row_id, mid_raw, irt_raw in rows:
+        mid = clean_mid(mid_raw)
+        if mid:
+            tid = find(mid)
+        else:
+            tid = ""
+        batch.append((tid, row_id))
+        if len(batch) >= 5000:
+            db.executemany("UPDATE emails SET thread_id = ? WHERE id = ?", batch)
+            db.commit()
+            batch = []
+
+    if batch:
+        db.executemany("UPDATE emails SET thread_id = ? WHERE id = ?", batch)
+    db.commit()
+
+    # Count threads for stats
+    thread_count = db.execute("SELECT COUNT(DISTINCT thread_id) FROM emails WHERE thread_id != ''").fetchone()[0]
+
     db.close()
-    print(f"Index complete: {count} emails indexed at {index_path}", file=sys.stderr)
+    print(f"Index complete: {count} emails indexed, {thread_count} threads at {index_path}", file=sys.stderr)
 
 
 def read_msg_at(mbox_path, offset, size):
@@ -247,15 +360,18 @@ def search_index(args):
     conditions = []
     params = []
 
-    if args.date_from:
+    if args.after:
         conditions.append("date_utc >= ?")
-        params.append(args.date_from.strftime("%Y-%m-%d 00:00:00"))
-    if args.date_to:
+        params.append(args.after.strftime("%Y-%m-%d 00:00:00"))
+    if args.before:
         conditions.append("date_utc < ?")
-        params.append(args.date_to.strftime("%Y-%m-%d 00:00:00"))
+        params.append(args.before.strftime("%Y-%m-%d 00:00:00"))
     if args.sender:
         conditions.append("sender LIKE ? COLLATE NOCASE")
         params.append(f"%{args.sender}%")
+    if args.recipient:
+        conditions.append("(recipient LIKE ? COLLATE NOCASE OR cc LIKE ? COLLATE NOCASE OR bcc LIKE ? COLLATE NOCASE)")
+        params.extend([f"%{args.recipient}%"] * 3)
     if args.subject:
         conditions.append("subject LIKE ? COLLATE NOCASE")
         params.append(f"%{args.subject}%")
@@ -287,14 +403,23 @@ def show_email(mbox_path, index_path, email_id, output_format):
     body = get_body_text(msg).strip() if msg else ""
     attachments = get_attachments(msg) if msg else []
 
+    to_display = format_addresses(row["recipient"])
+    cc_display = format_addresses(row["cc"])
+    bcc_display = format_addresses(row["bcc"])
+
     record = {
         "id": row["id"],
         "date": row["date"] or "(unknown)",
         "date_utc": row["date_utc"],
         "from": row["sender"],
+        "to": to_display,
         "subject": row["subject"],
         "body": body,
     }
+    if cc_display:
+        record["cc"] = cc_display
+    if bcc_display:
+        record["bcc"] = bcc_display
     if attachments:
         record["attachments"] = [
             {"index": idx, "filename": fn, "type": ct, "size": sz}
@@ -323,6 +448,12 @@ def show_email(mbox_path, index_path, email_id, output_format):
         print(f"ID:      {record['id']}")
         print(f"Date:    {record['date']}")
         print(f"From:    {record['from']}")
+        if to_display:
+            print(f"To:      {to_display}")
+        if cc_display:
+            print(f"CC:      {cc_display}")
+        if bcc_display:
+            print(f"BCC:     {bcc_display}")
         print(f"Subject: {record['subject']}")
         print(f"Body:\n{body}")
         if attachments:
@@ -396,15 +527,85 @@ def extract_attachment(mbox_path, index_path, spec, output_dir):
     sys.exit(1)
 
 
+def _clean_mid(mid):
+    """Strip whitespace and angle brackets from a Message-ID."""
+    return mid.strip().strip("<>").strip() if mid else ""
+
+
+def show_thread(index_path, email_id):
+    """Display the full thread containing the given email ID using precomputed thread_id."""
+    db = sqlite3.connect(str(index_path))
+    db.row_factory = sqlite3.Row
+
+    seed = db.execute("SELECT thread_id FROM emails WHERE id = ?", (email_id,)).fetchone()
+    if seed is None:
+        print(f"Email with id {email_id} not found.", file=sys.stderr)
+        sys.exit(1)
+
+    tid = seed["thread_id"]
+    if not tid:
+        print(f"Email {email_id} has no Message-ID, cannot reconstruct thread.", file=sys.stderr)
+        sys.exit(1)
+
+    thread_rows = db.execute(
+        "SELECT id, message_id, in_reply_to, subject, date_utc, sender FROM emails WHERE thread_id = ? ORDER BY date_utc",
+        (tid,),
+    ).fetchall()
+    db.close()
+
+    # Build tree from in_reply_to
+    thread_mid_set = {_clean_mid(r["message_id"]) for r in thread_rows}
+    root_rows = []
+    child_map = {}
+
+    for row in thread_rows:
+        parent = _clean_mid(row["in_reply_to"])
+        if parent and parent in thread_mid_set:
+            child_map.setdefault(parent, []).append(row)
+        else:
+            root_rows.append(row)
+
+    for mid in child_map:
+        child_map[mid].sort(key=lambda r: r["date_utc"] or "")
+
+    max_id = max(r["id"] for r in thread_rows)
+    id_width = len(str(max_id))
+
+    def print_tree(row, depth=0):
+        mid = _clean_mid(row["message_id"])
+        subj = row["subject"] or "(no subject)"
+        if len(subj) > 70:
+            subj = subj[:67] + "..."
+        date_short = (row["date_utc"] or "")[:10]
+        indent = "  " * depth
+        marker = " <--" if row["id"] == email_id else ""
+        print(f"[{row['id']:{id_width}d}] {indent}{subj}  ({row['sender'] or ''}, {date_short}){marker}")
+        for child in child_map.get(mid, []):
+            print_tree(child, depth + 1)
+
+    print(f"Thread ({len(thread_rows)} emails):\n")
+    for root in root_rows:
+        print_tree(root)
+
+
 def format_result(row, body, found, output_format):
     """Format a single search result."""
+    to_display = format_addresses(row["recipient"])
+    cc_display = format_addresses(row["cc"])
+    bcc_display = format_addresses(row["bcc"])
+
     record = {
         "id": row["id"],
         "date": row["date"] or "(unknown)",
         "date_utc": row["date_utc"],
         "from": row["sender"],
+        "to": to_display,
         "subject": row["subject"],
     }
+    if cc_display:
+        record["cc"] = cc_display
+    if bcc_display:
+        record["bcc"] = bcc_display
     if row["has_attachments"]:
         record["has_attachments"] = True
     if body is not None:
@@ -423,6 +624,12 @@ def format_result(row, body, found, output_format):
         lines = [f"--- #{found} (id:{row['id']}{attach_marker}) ---"]
         lines.append(f"Date:    {record['date']}")
         lines.append(f"From:    {record['from']}")
+        if to_display:
+            lines.append(f"To:      {to_display}")
+        if cc_display:
+            lines.append(f"CC:      {cc_display}")
+        if bcc_display:
+            lines.append(f"BCC:     {bcc_display}")
         lines.append(f"Subject: {record['subject']}")
         if body is not None:
             preview = body[:500].replace("\n", "\n         ")
@@ -440,14 +647,16 @@ def add_arguments(parser):
     search = parser.add_argument_group("search filters")
     search.add_argument("--from", dest="sender", type=str,
                         help="Case-insensitive substring match on the From header (name or email address)")
+    search.add_argument("--to", dest="recipient", type=str,
+                        help="Case-insensitive substring match on the To/CC/BCC headers (email address)")
     search.add_argument("--subject", type=str,
                         help="Case-insensitive substring match on the Subject header")
     search.add_argument("--body", type=str,
                         help="Case-insensitive substring match in the email body text. "
                              "Slower than header filters because it seeks into the mbox file for each candidate")
-    search.add_argument("--date-from", type=str,
+    search.add_argument("--after", type=str,
                         help="Only emails on or after this date, format YYYY-MM-DD (UTC)")
-    search.add_argument("--date-to", type=str,
+    search.add_argument("--before", type=str,
                         help="Only emails before this date, format YYYY-MM-DD (UTC, exclusive)")
     search.add_argument("--has-attachment", action="store_true",
                         help="Only show emails that have file attachments")
@@ -466,6 +675,9 @@ def add_arguments(parser):
     actions.add_argument("--show", type=int, metavar="ID",
                          help="Show full email by its database ID (from search results). "
                               "Displays complete body and lists all attachments with their extract commands")
+    actions.add_argument("--thread", type=int, metavar="ID",
+                         help="Reconstruct and display the full email thread containing this email ID. "
+                              "Shows an indented tree of all related emails with their IDs for quick navigation")
     actions.add_argument("--attachment", type=str, metavar="ID-N",
                          help="Extract attachment number N from email ID and save to disk. "
                               "Format: EMAIL_ID-ATTACHMENT_INDEX, e.g. 1234-1. "
@@ -500,7 +712,7 @@ def run(args):
 
     if args.re_index or not args.index_path.exists():
         create_index(mbox_path, args.index_path)
-        if args.re_index and not (args.show is not None or args.attachment or args.date_from or args.date_to or args.sender or args.subject or args.body):
+        if args.re_index and not (args.show is not None or args.attachment or args.thread is not None or args.after or args.before or args.sender or args.subject or args.body):
             return
 
     # Extract attachment
@@ -508,15 +720,20 @@ def run(args):
         extract_attachment(mbox_path, args.index_path, args.attachment, args.output_dir)
         return
 
+    # Show thread
+    if args.thread is not None:
+        show_thread(args.index_path, args.thread)
+        return
+
     # Show single email by ID
     if args.show is not None:
         show_email(mbox_path, args.index_path, args.show, args.output)
         return
 
-    if args.date_from:
-        args.date_from = datetime.strptime(args.date_from, "%Y-%m-%d")
-    if args.date_to:
-        args.date_to = datetime.strptime(args.date_to, "%Y-%m-%d")
+    if args.after:
+        args.after = datetime.strptime(args.after, "%Y-%m-%d")
+    if args.before:
+        args.before = datetime.strptime(args.before, "%Y-%m-%d")
 
     rows = search_index(args)
 
@@ -547,8 +764,15 @@ def run(args):
                     "date": row["date"] or "(unknown)",
                     "date_utc": row["date_utc"],
                     "from": row["sender"],
+                    "to": format_addresses(row["recipient"]),
                     "subject": row["subject"],
                 }
+                cc_display = format_addresses(row["cc"])
+                bcc_display = format_addresses(row["bcc"])
+                if cc_display:
+                    record["cc"] = cc_display
+                if bcc_display:
+                    record["bcc"] = bcc_display
                 if row["has_attachments"]:
                     record["has_attachments"] = True
                 if body is not None:
