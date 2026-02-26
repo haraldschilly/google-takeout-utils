@@ -28,10 +28,17 @@ QUICK START:
   cd /path/to/your/extracted/takeout
   uvx google-takeout-utils@latest search-email --from alice --limit 5
 
-The tool expects a Takeout/ directory (from Google Takeout) in the current
-working directory. Use --mbox to override the mbox file location.
+  Or point to the takeout directory from anywhere:
+  uvx google-takeout-utils@latest --takeout-dir /path/to/takeout search-email --from alice
 """,
         formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+
+    parser.add_argument(
+        "--takeout-dir", type=str, default=None,
+        help="Path to the root directory containing the Takeout/ folder "
+             "(e.g. the extracted Google Takeout zip). "
+             "If not set, the tool looks relative to the current working directory.",
     )
 
     subparsers = parser.add_subparsers(dest="command", title="commands")

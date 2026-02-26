@@ -21,8 +21,10 @@ MBOX_NAME = "All mail Including Spam and Trash.mbox"
 MBOX_RELATIVE = Path("Takeout") / "Mail" / MBOX_NAME
 
 
-def _default_mbox_path():
-    """Find mbox: first try relative to script (clone layout), then relative to cwd (uvx/pip)."""
+def _default_mbox_path(takeout_dir=None):
+    """Find mbox: use --takeout-dir if given, else try script-relative (clone), then cwd (uvx/pip)."""
+    if takeout_dir:
+        return Path(takeout_dir) / MBOX_RELATIVE
     script_relative = Path(__file__).parent.parent / "Takeout" / "Mail" / MBOX_NAME
     if script_relative.exists():
         return script_relative
@@ -492,7 +494,8 @@ def register_subcommand(subparsers):
 
 def run(args):
     """Execute the search-email command with parsed args."""
-    mbox_path = Path(args.mbox) if args.mbox else _default_mbox_path()
+    takeout_dir = getattr(args, "takeout_dir", None)
+    mbox_path = Path(args.mbox) if args.mbox else _default_mbox_path(takeout_dir)
     args.index_path = mbox_path.parent / "index.sqlite"
 
     if args.re_index or not args.index_path.exists():

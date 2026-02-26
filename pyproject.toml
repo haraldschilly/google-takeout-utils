@@ -1,6 +1,6 @@
 [project]
 name = "google-takeout-utils"
-version = "0.1.1"
+version = "0.1.2"
 description = "CLI tools for searching, reading, and extracting emails from Google Takeout mbox exports"
 readme = "README.md"
 license = {text = "Apache-2.0"}
