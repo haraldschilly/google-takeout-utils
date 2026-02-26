@@ -8,7 +8,12 @@
 
 - **Do not leak private or sensitive information.** This tool processes personal email data. Never log, print, or expose email content, sender addresses, or other PII in error messages, debug output, or committed test fixtures.
 - **Always use `uv`** for running Python, e.g. `uv run python3 ...` to stay in the uv environment.
-- **Release checklist:** When tagging a new version, after pushing the tag, add a corresponding entry to `CHANGELOG.md` (follows [Keep a Changelog](https://keepachangelog.com/) format) and push it as a follow-up commit.
+- **Release checklist** (in this order):
+  1. Bump `version` in `pyproject.toml`
+  2. Run `uv sync` so `uv.lock` picks up the new version
+  3. Write the new entry in `CHANGELOG.md` (follows [Keep a Changelog](https://keepachangelog.com/) format, include compare link at bottom)
+  4. Commit all three files (`pyproject.toml`, `uv.lock`, `CHANGELOG.md`) and push
+  5. Create git tag `vX.Y.Z` and push it (`git tag vX.Y.Z && git push origin vX.Y.Z`)
 
 ## Project Structure
 

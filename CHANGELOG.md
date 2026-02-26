@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-02-26
+
+### Added
+
+- **To/CC/BCC display** in search results and `--show` output (max 3 addresses shown)
+- **`--to` filter** — searches across To, CC, and BCC headers
+- **`--thread ID`** — reconstructs and displays the full email thread as an indented tree
+- **Thread indexing** — precomputed `thread_id` via Union-Find on `In-Reply-To` chains for instant thread lookups
+- New index columns: `recipient`, `cc`, `bcc` (JSON arrays of email addresses), `message_id`, `in_reply_to`, `refs`, `thread_id`
+
+### Changed
+
+- **Renamed date filters**: `--date-from` / `--date-to` → `--after` / `--before`
+- Index must be rebuilt with `--re-index` after upgrading from 0.1.x
+
 ## [0.1.2] - 2026-02-26
 
 ### Added
@@ -32,6 +47,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Auto-detect mbox from cwd for `uvx` usage
 - PyPI publishing via GitHub Actions
 
+[0.2.0]: https://github.com/haraldschilly/google-takeout-utils/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/haraldschilly/google-takeout-utils/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/haraldschilly/google-takeout-utils/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/haraldschilly/google-takeout-utils/releases/tag/v0.1.0
